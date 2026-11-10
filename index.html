@@ -232,6 +232,9 @@
 			.syl-red { color: #D32F2F; }
 			/* Bei Richtig/Falsch färbt sich das ganze Wort grün bzw. rot */
 			.correct-anim .syl, .wrong-anim .syl { color: inherit !important; }
+			/* Silben-Hilfe (Schwer/Profi): nach einem Fehlversuch kurz blau-rot, solange vorgelesen wird */
+			.syl-help .syl.syl-blue { color: #1565C0 !important; }
+			.syl-help .syl.syl-red { color: #D32F2F !important; }
 
 			/* Weltreise */
 			.space-panel {
@@ -1215,6 +1218,20 @@
 			.stamp:nth-child(even) { transform: rotate(5deg); }
 			.stamp.empty:nth-child(even) { transform: none; }
 			.pass-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px 6px; padding: 6px 0; }
+			/* Stempel im Pass sind antippbar (öffnen das Länder-Fenster) */
+			.stamp-btn {
+			    background: none; border: none; padding: 4px 0; margin: 0; font: inherit; color: inherit;
+			    cursor: pointer; justify-self: center; -webkit-tap-highlight-color: transparent;
+			}
+			.stamp-btn:active .stamp-pic { filter: brightness(0.92); }
+			.stamp-btn:focus-visible { outline: 3px solid var(--wald-hell); outline-offset: 2px; border-radius: 12px; }
+			/* Erinnerung an die Sicherung auf dem Endbildschirm (nach jedem 3. Kapitel) */
+			.backup-hint {
+			    background: var(--blatt); border: 2px dashed var(--wald-hell); border-radius: 14px;
+			    padding: 10px 14px; margin: 10px auto 4px; max-width: 460px; color: var(--tinte);
+			}
+			.backup-hint p { margin: 0 0 8px; font-size: 0.95em; }
+			.backup-hint .small-btn { margin: 0; }
 			@media (prefers-reduced-motion: reduce) { .stamp.big { animation: none; } }
 		
 			/* Kiko, der Papagei, fliegt auf dem Startbildschirm zu dem, was man antippt */
@@ -1422,6 +1439,12 @@
 
 			<p class="end-text-stats hidden" id="end-text-stats"></p>
 
+			<!-- Nach jedem 3. gelesenen Kapitel: Erinnerung an die Sicherung -->
+			<div class="backup-hint hidden" id="backup-hint">
+				<p id="backup-hint-text"></p>
+				<button class="small-btn neutral" onclick="exportBackup(this)">💾 Sicherung speichern</button>
+			</div>
+
 			<p style="font-size: 1em; color: #555;" id="end-word-stats">
 				Dafür hast du
 				<span
@@ -1540,7 +1563,7 @@
 				<h2 id="planet-title"></h2>
 				<p class="planet-sub" id="planet-sub">Wusstest du schon?</p>
 				<ul class="planet-facts" id="planet-facts"></ul>
-				<button class="modal-btn no planet-ok" onclick="closePlanetInfo()">OK</button>
+				<button class="modal-btn no planet-ok" id="planet-ok" onclick="confirmPlanetInfo()">OK</button>
 			</div>
 		</div>
 
@@ -1609,20 +1632,23 @@
 			// =====================================================================
 			// EINSTELLUNGEN & KONSTANTEN
 			// =====================================================================
-			const APP_VERSION = 'Version 3 · Oktober 2026';
+			const APP_VERSION = 'Version 10. November 2026';
 			const ALL_LEVELS = ['leicht', 'mittel', 'schwer', 'profi'];  // Profi gibt es nur bei Silben
 			const WORDS_PER_ROUND = 10;
 			const MIN_WORDS = 10;                  // so viele Wörter braucht jede Stufe mindestens
 			const MASTER_STREAK = 3;               // so oft hintereinander richtig = kein Knackwort mehr
 			const TIMER_OPTIONS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20]; // 0 = Aus
 			const FUEL_PER_STATION = 4;            // Treibstoff bis zur nächsten Station
-			// Lesequiz: Treibstoff je richtiger Antwort (beim ersten Versuch mehr)
-			const QUIZ_FUEL_FIRST = 2;
-			const QUIZ_FUEL_LATER = 1;
+			// Lesequiz: 1 Feuer je Frage, die beim ersten Versuch richtig ist, 0 nach einem Fehlversuch.
+			// So bringt ein Kapitel höchstens 4 Feuer – genau eine Station.
+			const QUIZ_FUEL_FIRST = 1;
+			const QUIZ_FUEL_LATER = 0;
 			const TEXT_SIZES = { m: 'Normal', l: 'Groß', xl: 'Sehr groß' };
 
 			// Die Weltreise im Heißluftballon: In jedem Land gibt es einen Stempel in den Reisepass.
-			// 15 Stationen: Start in Deutschland, dann ostwärts einmal um die Welt.
+			// 15 Stationen: zuerst nach Deutschland, dann ostwärts einmal um die Welt.
+			// Eine neue Reise beginnt vor Station 1 mit 0 Stempeln. Jede Station – auch Deutschland –
+			// kostet 4 Feuer, die ganze Reise also 15 × 4 = 60 Feuer.
 			// "tier" steht im Satz „Hier lebt …“ – alle Angaben sind wahr (das Tier lebt wirklich dort).
 			const STATIONS = [
 			    { name: 'Deutschland', emoji: '🐺', bild: 'Wolf', tier: 'der Wolf', start: true },
@@ -1642,7 +1668,12 @@
 			    { name: 'Grönland',    emoji: '🐻‍❄️', bild: 'Eisbär', tier: 'der Eisbär' }
 			];
 			STATIONS.forEach(st => { st.fact = (st.start ? 'Hier startet deine Reise. ' : '') + 'Hier lebt ' + st.tier + '.'; });
-			const JOURNEY_MAX = (STATIONS.length - 1) * FUEL_PER_STATION;
+			const JOURNEY_MAX = STATIONS.length * FUEL_PER_STATION;
+			// Bis Oktober 2026 stand der Ballon zu Beginn schon in Deutschland (Feuer 0 = 1 Stempel).
+			// Ältere Spielstände werden beim Laden um eine Station verschoben, damit kein Stempel verloren geht.
+			const JOURNEY_VERSION = 2;
+			// Anzahl der Stempel dieser Reise (0–15) bei einem Feuer-Stand
+			function stampsFor(fuel) { return Math.floor(Math.max(0, Math.min(fuel, JOURNEY_MAX)) / FUEL_PER_STATION); }
 
 			// Speicher-Schlüssel, die alle Spiele gemeinsam nutzen
 			// (Namen unverändert, damit gespeicherte Daten aus älteren Versionen erhalten bleiben)
@@ -1717,18 +1748,21 @@
 			// Fester, gut lesbarer Schriftstil für das Silben-Training
 			const SILBEN_STYLE = { font: 'Verdana, Geneva, Arial, sans-serif', color: '#111111', weight: 'bold', size: 56 };
 
-			// Schrift-Vielfalt: gut lesbare Druckschriften mit Ersatzschriften für iPhone/iPad/Windows
+			// Schrift-Vielfalt: klare Druckschriften für die 2. Klasse (alle auf dem iPad vorhanden),
+			// mit Ersatzschriften für iPhone/Windows. Geprüft Nov 2026: Times New Roman (eng, kleine
+			// Kleinbuchstaben), Palatino (geschwungen, verschnörkelt) und Courier New (dünne
+			// Schreibmaschinenschrift) wurden durch Charter, SF Pro Rounded und die iPad-Systemschrift ersetzt.
 			const fonts = [
 			    'Arial, Helvetica, sans-serif',
-			    '"Times New Roman", Times, serif',
+			    'Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif',
 			    'Georgia, "Times New Roman", serif',
 			    'Verdana, Geneva, sans-serif',
 			    '"Avenir Next", Avenir, "Segoe UI", sans-serif',
 			    '"Trebuchet MS", Arial, sans-serif',
 			    'Futura, "Century Gothic", Arial, sans-serif',
 			    '"Gill Sans", "Gill Sans MT", Calibri, sans-serif',
-			    'Palatino, "Palatino Linotype", "Book Antiqua", serif',
-			    '"Courier New", Courier, monospace',
+			    'ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", "Varela Round", Arial, sans-serif',
+			    '-apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, Arial, sans-serif',
 			    '"Chalkboard SE", "Comic Sans MS", Arial, sans-serif'
 			];
 			// Kein Rot und kein Grün: Diese Farben bedeuten im Spiel "falsch" bzw. "richtig"
@@ -1804,7 +1838,7 @@
 			let currentMode = 'normal';
 			let wordStats = {};
 			let timerSeconds = 0;
-			let journey = { fuel: 0, trips: 0 };
+			let journey = { fuel: 0, trips: 0, v: JOURNEY_VERSION };
 			let options = {};
 
 			// Stufe, Knackwort-Daten und Zeit pro Wort des aktuellen Spiels laden
@@ -1831,7 +1865,7 @@
 			        currentDifficulty = 'leicht';
 			        wordStats = {};
 			        timerSeconds = 0;
-			        journey = { fuel: 0, trips: 0 };
+			        journey = { fuel: 0, trips: 0, v: JOURNEY_VERSION };
 			        options = { sound: true, listen: false, autoWrong: true, tts: true, sylColors: true, textSize: 'm', tapRead: true };
 			        try { loadWords(); } catch (e2) { activePool = {}; }
 			    }
@@ -1846,8 +1880,14 @@
 
 			    const savedJourney = readJSON(KEYS.journey, {});
 			    journey = isPlainObject(savedJourney)
-			        ? { fuel: safeCount(savedJourney.fuel, JOURNEY_MAX), trips: safeCount(savedJourney.trips) }
-			        : { fuel: 0, trips: 0 };
+			        ? { fuel: safeCount(savedJourney.fuel, JOURNEY_MAX), trips: safeCount(savedJourney.trips), v: JOURNEY_VERSION }
+			        : { fuel: 0, trips: 0, v: JOURNEY_VERSION };
+			    // Alter Spielstand (Deutschland war schon bei 0 Feuer gestempelt): eine Station dazurechnen.
+			    // Bei 0 Feuer hat die Reise noch nicht begonnen – dann gibt es auch keinen Stempel.
+			    if (isPlainObject(savedJourney) && own(savedJourney, 'fuel') && savedJourney.v !== JOURNEY_VERSION) {
+			        if (journey.fuel > 0) journey.fuel = Math.min(journey.fuel + FUEL_PER_STATION, JOURNEY_MAX);
+			        writeJSON(KEYS.journey, journey);
+			    }
 
 			    // sound = Töne, listen = Spracherkennung, autoWrong = Falsch automatisch, tts = Vorlesen bei Falsch,
 			    // sylColors = Silben in den Tier-Texten blau/rot, textSize = Schriftgröße der Texte (m/l/xl),
@@ -2677,10 +2717,10 @@
 			}
 			function settingsProgress(box) {
 			    const finished = journey.fuel >= JOURNEY_MAX;
-			    const station = Math.floor(Math.min(journey.fuel, JOURNEY_MAX) / FUEL_PER_STATION);
+			    const stamps = stampsFor(journey.fuel);
 			    const journeyText = finished
 			        ? 'Einmal um die Welt! 🌍'
-			        : `Gerade unterwegs zu: ${STATIONS[station + 1].name} (🔥 ${journey.fuel % FUEL_PER_STATION} / ${FUEL_PER_STATION})`;
+			        : `Gerade unterwegs zu: ${STATIONS[stamps].name} (🔥 ${journey.fuel % FUEL_PER_STATION} / ${FUEL_PER_STATION})`;
 			    const progress = readTextProgress();
 			    const read = TEXTS.filter(t => own(progress, t.id));
 			    const stars = read.reduce((sum, t) => sum + Math.min(progress[t.id].sterne, t.raetsel.length), 0);
@@ -2688,7 +2728,7 @@
 			    <div class="settings-section">
 			        <h3>🎈 Weltreise im Ballon</h3>
 			        <p class="info">${journeyText}${journey.trips ? ` · ${journey.trips}× geschafft` : ''}</p>
-			        <p class="info">Feuer 🔥 für den Ballon gibt es für jede Runde Sichtwörter oder Silben und für jede richtige Antwort im Lesequiz. In jedem Land gibt es einen Stempel in den Reisepass.</p>
+			        <p class="info">Feuer 🔥 für den Ballon gibt es für jede Runde Sichtwörter oder Silben und für jede Frage im Lesequiz, die beim ersten Versuch richtig ist. In jedem Land gibt es einen Stempel in den Reisepass.</p>
 			        <button class="small-btn" onclick="resetJourney()">Weltreise neu starten</button>
 			    </div>
 			    <div class="settings-section">
@@ -2732,7 +2772,7 @@
 			}
 			function resetJourney() {
 			    showConfirm('Die Weltreise wieder in Deutschland starten? Die Stempel im Pass und „× geschafft“ werden gelöscht.', 'Ja, neu starten', 'Abbrechen', () => {
-			        journey = { fuel: 0, trips: 0 };
+			        journey = { fuel: 0, trips: 0, v: JOURNEY_VERSION };
 			        writeJSON(KEYS.journey, journey);
 			        renderSettings('fortschritt');
 			        toast('✓ Reise neu gestartet');
@@ -2749,7 +2789,7 @@
 			// ↺-Knopf direkt an der Reise im Startbildschirm
 			function askResetJourney() {
 			    showConfirm('Die Weltreise wieder in Deutschland starten? Die Stempel im Pass und „× geschafft“ werden gelöscht.', 'Ja, neu starten', 'Abbrechen', () => {
-			        journey = { fuel: 0, trips: 0 };
+			        journey = { fuel: 0, trips: 0, v: JOURNEY_VERSION };
 			        writeJSON(KEYS.journey, journey);
 			        renderJourney($('journey-start'), journey.fuel, 0);
 			    });
@@ -2808,10 +2848,59 @@
 			// Mit "Falsch automatisch" zählt ein anderes gesagtes Wort nach einer kurzen Pause als falsch
 			// (Selbstkorrektur innerhalb der Pause ist erlaubt). Rückgängig hilft bei Fehlerkennungen.
 			const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-			function speechSupported() { return !!SpeechRec && window.isSecureContext !== false; }
+			// true, wenn iOS die Spracherkennung beim Start vom Home-Bildschirm-Symbol blockiert (siehe unten)
+			let homeScreenSpeechBlocked = false;
+			function speechSupported() { return !!SpeechRec && window.isSecureContext !== false && !homeScreenSpeechBlocked; }
 			function isHomeScreenApp() {
 			    return window.navigator.standalone === true ||
 			        (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+			}
+			function isAppleMobile() {
+			    // iPadOS meldet sich wie ein Mac – erkennbar am Touchscreen
+			    return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+			        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+			}
+			const HOME_SCREEN_BLOCKED_MSG = 'Am Home-Bildschirm-Symbol blockiert iOS die Spracherkennung. Bitte ✔ und ✖ tippen – oder die Seite direkt in Safari öffnen, dort klappt das Zuhören.';
+
+			// Mikrofon-Prüfung beim Start vom Home-Bildschirm (iPad/iPhone): Gibt es die Web Speech API
+			// dort nicht oder lässt iOS sie nicht starten, wird der Mikrofon-Knopf in der Wort-Runde
+			// ausgeblendet (die Einstellung selbst bleibt gespeichert – in Safari geht es weiter).
+			function checkHomeScreenSpeech() {
+			    if (!isHomeScreenApp() || !isAppleMobile()) return;
+			    const block = () => {
+			        if (homeScreenSpeechBlocked) return;
+			        homeScreenSpeechBlocked = true;
+			        if (options.listen) voiceMessage = HOME_SCREEN_BLOCKED_MSG;
+			        updateVoiceUI();
+			        updateListenPill();
+			    };
+			    const unblock = () => {
+			        if (!homeScreenSpeechBlocked) return;
+			        homeScreenSpeechBlocked = false;
+			        if (voiceMessage === HOME_SCREEN_BLOCKED_MSG) voiceMessage = '';
+			        updateVoiceUI();
+			        updateListenPill();
+			    };
+			    if (!SpeechRec) { block(); return; }
+			    if (!options.listen) return;   // Mikrofon wird erst gebraucht, wenn die Spracherkennung an ist
+			    let rec;
+			    try { rec = new SpeechRec(); } catch (e) { block(); return; }
+			    let started = false;
+			    const stop = () => { try { rec.abort(); } catch (e) {} };
+			    // Meldet iOS gar nichts, gilt die Spracherkennung als blockiert (ein spätes „Start“ hebt das auf)
+			    const timer = setTimeout(() => { if (!started) block(); }, 6000);
+			    rec.lang = 'de-DE';
+			    rec.onstart = () => { started = true; clearTimeout(timer); unblock(); stop(); };
+			    rec.onerror = (event) => {
+			        const error = event && event.error;
+			        if (error === 'not-allowed' || error === 'service-not-allowed' || error === 'audio-capture') {
+			            clearTimeout(timer);
+			            block();
+			        }
+			    };
+			    // Endet die Sitzung, ohne je gestartet zu sein, lässt iOS das Mikrofon nicht zu
+			    rec.onend = () => { if (!started) { clearTimeout(timer); block(); } };
+			    try { rec.start(); } catch (e) { clearTimeout(timer); block(); }
 			}
 			function ttsSupported() { return 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window; }
 
@@ -3392,7 +3481,11 @@
 			    options.listen = !options.listen;
 			    voiceMessage = '';
 			    saveOptions();
-			    if (options.listen) probeMicrophone();
+			    if (options.listen) {
+			        // Vom Home-Bildschirm aus (iPad/iPhone) dieselbe Prüfung wie beim Start
+			        if (isHomeScreenApp() && isAppleMobile()) checkHomeScreenSpeech();
+			        else probeMicrophone();
+			    }
 			    updateVoiceUI();
 			}
 			function toggleAutoWrong() {
@@ -3452,7 +3545,9 @@
 			    setSwitch('tg-tapread', options.tapRead && canSpeak(), !canSpeak());
 			    updateVoicePicker();
 			    let hint = voiceMessage;
-			    if (!hint && !speechSupported()) {
+			    if (!hint && homeScreenSpeechBlocked) {
+			        hint = HOME_SCREEN_BLOCKED_MSG;
+			    } else if (!hint && !speechSupported()) {
 			        hint = window.isSecureContext === false
 			            ? 'Spracherkennung geht nur über einen https-Link (z. B. GitHub Pages), nicht als Datei.'
 			            : 'Spracherkennung wird von diesem Browser nicht unterstützt. Am iPhone: Safari benutzen.';
@@ -3556,7 +3651,7 @@
 			function showWord() {
 			    const display = $('word-display');
 			    const textEl = $('word-text');
-			    textEl.classList.remove('correct-anim', 'wrong-anim');
+			    textEl.classList.remove('correct-anim', 'wrong-anim', 'syl-help');
 
 			    if (isSilben()) {
 			        showSilbenWord(textEl, wordsQueue[0]);
@@ -3595,6 +3690,16 @@
 			        span.textContent = syl;
 			        textEl.appendChild(span);
 			    });
+			}
+
+			// Silben-Hilfe nach einem Fehlversuch (nur Silben-Spiel, Stufen ohne Farben: Schwer und Profi)
+			function showSyllableHelp(textEl) {
+			    if (!isSilben() || (game().colored || []).includes(currentDifficulty)) return false;
+			    const spans = textEl.querySelectorAll('.syl');
+			    if (spans.length < 2) return false;
+			    spans.forEach((span, i) => span.classList.add(i % 2 === 0 ? 'syl-blue' : 'syl-red'));
+			    textEl.classList.add('syl-help');
+			    return true;
 			}
 
 			function updateProgress() {
@@ -3662,6 +3767,10 @@
 			        textEl.classList.add('wrong-anim');
 			        gameContainer.classList.add('flash-wrong');
 			        updateProgress();
+			        // Silben-Hilfe: In Schwer und Profi (sonst ganz schwarz) färbt sich das Wort nach einem
+			        // Fehlversuch kurz blau-rot, solange es vorgelesen wird. Beim nächsten Mal ist es wieder schwarz.
+			        const sylHelp = showSyllableHelp(textEl);
+			        const minShow = sylHelp ? 1200 : 600;
 			        // Falsch gelesenes Wort wandert ans Ende der Warteschlange
 			        const requeue = () => wordsQueue.push(wordsQueue.shift());
 			        if (ttsWanted()) {
@@ -3670,10 +3779,10 @@
 			            stopListening();
 			            speakWord(word, () => {
 			                if (!roundActive) return;
-			                scheduleNext(requeue, Math.max(250, 600 - (performance.now() - answeredAt)));
+			                scheduleNext(requeue, Math.max(250, minShow - (performance.now() - answeredAt)));
 			            });
 			        } else {
-			            scheduleNext(requeue);
+			            scheduleNext(requeue, minShow);
 			        }
 			    }
 			}
@@ -3898,6 +4007,7 @@
 			    $('round-words').classList.toggle('hidden', !words);
 			    $('history').classList.toggle('hidden', !words);
 			    $('end-text-stats').classList.toggle('hidden', words);
+			    $('backup-hint').classList.add('hidden');   // zeigt finishText() nach jedem 3. Kapitel
 			    const again = $('btn-again');
 			    if (words) {
 			        again.textContent = '🔄 Nochmal';
@@ -3985,7 +4095,11 @@
 			// =====================================================================
 			// WELTREISE
 			// =====================================================================
-			const STATION_STEP = 320 / (STATIONS.length - 1);
+			// Der Ballon startet links vor Station 1 (Deutschland); die Stationen folgen in gleichen Abständen
+			const MAP_START = 14;
+			const MAP_END = 346;
+			const STATION_STEP = (MAP_END - MAP_START) / STATIONS.length;
+			function stationX(i) { return Math.round((MAP_START + (i + 1) * STATION_STEP) * 10) / 10; }
 			function stationMini(st, x) {
 			    // Kleiner Tukan für Brasilien (es gibt kein Tukan-Emoji), sonst das Tier-Emoji
 			    const inner = st.bild === 'Tukan'
@@ -4005,9 +4119,9 @@
 			        </g>
 			        <path d="M0 74 C40 62 70 78 110 70 C150 62 190 80 240 70 C280 62 320 78 360 68 L360 84 L0 84 Z" fill="#7cc47f"/>
 			        <path d="M0 80 C60 70 120 84 180 76 C240 68 300 84 360 76 L360 84 L0 84 Z" fill="#3f9d63"/>
-			        <line x1="20" y1="62" x2="340" y2="62" stroke="rgba(31,107,69,0.45)" stroke-width="2" stroke-dasharray="4 5"/>
-			        <rect class="trail" x="20" y="60.5" width="320" height="3" rx="1.5" fill="#f7941d"/>
-			        ${STATIONS.map((st, i) => stationMini(st, Math.round((20 + i * STATION_STEP) * 10) / 10)).join('')}
+			        <line x1="${MAP_START}" y1="62" x2="${MAP_END}" y2="62" stroke="rgba(31,107,69,0.45)" stroke-width="2" stroke-dasharray="4 5"/>
+			        <rect class="trail" x="${MAP_START}" y="60.5" width="${MAP_END - MAP_START}" height="3" rx="1.5" fill="#f7941d"/>
+			        ${STATIONS.map((st, i) => stationMini(st, stationX(i))).join('')}
 			        <g class="rocket">
 			            <path d="M-9 -4 C-9 -17 9 -17 9 -4 C9 3 4 7 2.5 10 L-2.5 10 C-4 7 -9 3 -9 -4 Z" fill="#e8483b"/>
 			            <path d="M-3.2 -13.6 C-5.5 -8 -5 2 -2.5 10 L2.5 10 C5 2 5.5 -8 3.2 -13.6 C1 -14.2 -1 -14.2 -3.2 -13.6 Z" fill="#ffc93c"/>
@@ -4034,22 +4148,22 @@
 			function renderJourney(panel, fuel, gain, trips = journey.trips) {
 			    const clamped = Math.max(0, Math.min(fuel, JOURNEY_MAX));
 			    const position = clamped / FUEL_PER_STATION;
-			    const x = 20 + position * STATION_STEP;
-			    const reached = Math.floor(position);
+			    const x = MAP_START + position * STATION_STEP;
+			    const stamps = stampsFor(clamped);         // Station i ist erreicht, wenn i < stamps
 			    const finished = clamped >= JOURNEY_MAX;
 
 			    panel.querySelector('.rocket').style.transform = `translate(${x}px, 30px) scale(1.25)`;
-			    panel.querySelector('.trail').style.transform = `scaleX(${(x - 20) / 320})`;
+			    panel.querySelector('.trail').style.transform = `scaleX(${(x - MAP_START) / (MAP_END - MAP_START)})`;
 			    panel.querySelectorAll('.planet').forEach((planet, i) => {
-			        planet.style.opacity = (i <= reached || trips > 0) ? '1' : '0.45';
-			        planet.classList.toggle('stamped', i <= reached || trips > 0);
+			        planet.style.opacity = (i < stamps || trips > 0) ? '1' : '0.45';
+			        planet.classList.toggle('stamped', i < stamps || trips > 0);
 			    });
 
 			    panel.querySelector('.space-gain').textContent = gain ? `+${gain} 🔥` : '';
 			    panel.querySelector('.space-trips').textContent = trips > 0 ? `${trips}× geschafft` : '';
 			    panel.querySelector('.space-next').textContent = finished
 			        ? 'Einmal um die Welt! 🌍'
-			        : `Nächstes Ziel: ${STATIONS[reached + 1].name}`;
+			        : `Nächstes Ziel: ${STATIONS[stamps].name}`;
 			    panel.querySelector('.space-fuel').textContent = finished
 			        ? 'Neue Reise nächste Runde'
 			        : `🔥 ${clamped % FUEL_PER_STATION} / ${FUEL_PER_STATION}`;
@@ -4078,10 +4192,14 @@
 
 			    const oldFuel = journey.fuel;
 			    const tripsBefore = journey.trips;
-			    const newFuel = Math.min(oldFuel + gain, JOURNEY_MAX);
-			    const oldStation = Math.floor(oldFuel / FUEL_PER_STATION);
-			    const newStation = Math.floor(newFuel / FUEL_PER_STATION);
-			    const arrived = newStation > oldStation;
+			    const oldStamps = stampsFor(oldFuel);
+			    // Etappen-Sperre: pro Runde höchstens eine Station weiter. Übriges Feuer zählt nur bis kurz
+			    // vor die übernächste Station – so wird nie eine Zwischenstation übersprungen.
+			    const stageLimit = (oldStamps + 2) * FUEL_PER_STATION - 1;
+			    const newFuel = Math.min(oldFuel + Math.max(0, gain), stageLimit, JOURNEY_MAX);
+			    const newStamps = stampsFor(newFuel);
+			    const arrived = newStamps > oldStamps;
+			    const newStation = newStamps - 1;        // Index der Station, auf der der Ballon jetzt landet
 
 			    journey.fuel = newFuel;
 			    if (newFuel >= JOURNEY_MAX) journey.trips += 1;
@@ -4586,8 +4704,8 @@
 			        reader.fuel += gain;
 			        btn.classList.add('right');
 			        playDing();
-			        $('quiz-fuel').textContent = `🔥 +${reader.fuel}`;
-			        fuelPop(`+${gain} 🔥`);
+			        $('quiz-fuel').textContent = reader.fuel ? `🔥 +${reader.fuel}` : '';
+			        if (gain) fuelPop(`+${gain} 🔥`);
 			        readerLater(() => {
 			            reader.q++;
 			            if (reader.q < reader.text.raetsel.length) showQuestion();
@@ -4634,6 +4752,12 @@
 			    $('end-text-stats').innerHTML = `📖 Kapitel ${t.nr}: <strong>${escapeHTML(t.titel)}</strong>` +
 			        (total ? `<br>🧩 Lesequiz: ${first} von ${total} Fragen beim ersten Versuch richtig<br>🔥 ${reader.fuel} Feuer für den Ballon gesammelt` : '');
 			    showEndLayout('text');
+			    // Nach jedem 3. abgeschlossenen Kapitel an die Sicherung erinnern (Safari löscht sonst irgendwann alles)
+			    const finishedChapters = Object.values(progress).reduce((sum, p) => sum + safeCount(p && p.gelesen), 0);
+			    if (finishedChapters > 0 && finishedChapters % 3 === 0) {
+			        $('backup-hint-text').textContent = `Schon ${finishedChapters} Kapitel geschafft! Jetzt eine Sicherung speichern, damit keine Sterne und Stempel verloren gehen.`;
+			        $('backup-hint').classList.remove('hidden');
+			    }
 			    const index = TEXTS.indexOf(t);
 			    const again = $('btn-again');
 			    if (index >= 0 && index < TEXTS.length - 1) {
@@ -4655,7 +4779,8 @@
 			// Je Land 6 kurze, kindgerechte Fakten. Pro Ankunft werden 3 gezeigt –
 			// bei der nächsten Reise die anderen 3, damit es immer etwas Neues gibt.
 			// (Der Satz im gelben Ankunfts-Kasten steht in STATIONS und kommt hier nicht noch einmal vor.)
-			// Kurze, belegte Fakten zum Tier des Landes (Quellen: LERNINHALTE.md). Pro Ankunft werden 3 gezeigt.
+			// Kurze, belegte Fakten zum Tier des Landes (Quellen: LERNINHALTE.md). Pro Ankunft werden 3 gezeigt
+			// (Deutschland: alle 4); ein Tipp auf den Stempel im Pass zeigt immer alle.
 			// Länder ohne Eintrag zeigen nur den Stempel – es wird nichts erfunden.
 			const LAND_INFO = {
 			    Deutschland: [
@@ -4696,6 +4821,12 @@
 			        'Im Winter fressen manche Schneeaffen auch Insekten, die im Wasser leben.',
 			        'Bei den Schneeaffen bleiben die Weibchen in ihrer Gruppe. Die Männchen wechseln die Gruppe.',
 			        'Schneeaffen fressen vor allem Pflanzen.'
+			    ],
+			    Thailand: [
+			        'Gibbons sind kleine Menschenaffen und haben keinen Schwanz.',
+			        'Ihre Arme sind viel länger als ihre Beine. So schwingen sie von Ast zu Ast.',
+			        'Mit einem Schwung schaffen sie über zehn Meter durch die Baumkronen.',
+			        'Gibbon-Paare singen jeden Morgen hoch im Baum laute Lieder zusammen.'
 			    ],
 			    Australien: [
 			        'Der Schwanz eines Riesenkängurus kann mehr als einen Meter lang werden.',
@@ -4738,47 +4869,75 @@
 			};
 			const PLANET_SHAPES = {};
 			function planetPicture() { return ''; }
-			function stampHTML(st, big) {
+			// tapIndex: Stempel im Pass ist ein Knopf und öffnet das Länder-Fenster dieser Station
+			function stampHTML(st, big, tapIndex) {
 			    const pic = st.bild ? pictureHTML(st.bild, true) : `<span class="stamp-emoji">${st.emoji}</span>`;
-			    return `<div class="stamp${big ? ' big' : ''}"><div class="stamp-pic">${pic}</div><div class="stamp-name">${escapeHTML(st.name)}</div></div>`;
+			    const inner = `<div class="stamp-pic">${pic}</div><div class="stamp-name">${escapeHTML(st.name)}</div>`;
+			    if (tapIndex !== undefined) {
+			        return `<button type="button" class="stamp stamp-btn" onclick="showStampInfo(${Number(tapIndex)})" aria-label="${escapeHTML(st.name)} ansehen">${inner}</button>`;
+			    }
+			    return `<div class="stamp${big ? ' big' : ''}">${inner}</div>`;
 			}
 
 			let planetOpen = false;
-			function showPlanetInfo(stationIndex, tripNumber) {
+			let planetFromPass = false;   // Länder-Fenster wurde aus dem Pass geöffnet → „OK“ führt zurück zum Pass
+			// Länder-Fenster mit Stempel und Fakten.
+			// Bei Ankunft: 3 Fakten, bei jeder neuen Reise andere. Ausnahme Deutschland (Start der Reise):
+			// beim ersten Stempel alle 4 Wolf-Fakten. Aus dem Pass (allFacts): immer alle Fakten des Landes.
+			function showPlanetInfo(stationIndex, tripNumber, allFacts = false) {
 			    const station = STATIONS[stationIndex];
 			    if (!station) return;
 			    const all = LAND_INFO[station.name] || [];
-			    const count = Math.min(3, all.length);
+			    const count = (allFacts || station.start) ? all.length : Math.min(3, all.length);
 			    const start = count ? (tripNumber * count) % all.length : 0;
 			    const facts = Array.from({ length: count }, (_, i) => all[(start + i) % all.length]);
+			    planetFromPass = allFacts;
 			    $('planet-pic').innerHTML = stampHTML(station, true);
 			    $('planet-title').textContent = `Stempel für ${station.name}!`;
 			    $('planet-sub').textContent = facts.length ? 'Wusstest du schon?' : station.fact;
 			    $('planet-facts').innerHTML = facts.map(f => `<li>${escapeHTML(f)}</li>`).join('');
+			    $('planet-ok').textContent = allFacts ? '📕 Zurück zum Pass' : 'OK';
 			    $('planet-modal').classList.remove('hidden');
 			    $('planet-modal').querySelector('.planet-card').scrollTop = 0;
 			    planetOpen = true;
 			}
-			// Der Reisepass: alle Länder, gestempelt sind die schon besuchten
+			// Der Reisepass: alle Länder, gestempelt sind die schon besuchten.
+			// Jeder Stempel lässt sich antippen und öffnet das Länder-Fenster mit allen Fakten.
 			function showPass() {
 			    if (modalOpen) return;
-			    const reached = Math.floor(Math.min(journey.fuel, JOURNEY_MAX) / FUEL_PER_STATION);
+			    planetFromPass = false;
+			    const stamps = stampsFor(journey.fuel);
 			    const cells = STATIONS.map((st, i) => {
-			        const got = journey.trips > 0 || i <= reached;
-			        return got ? stampHTML(st, false) : `<div class="stamp empty"><div class="stamp-pic">?</div><div class="stamp-name">${escapeHTML(st.name)}</div></div>`;
+			        const got = journey.trips > 0 || i < stamps;
+			        return got
+			            ? stampHTML(st, false, i)
+			            : `<div class="stamp empty"><div class="stamp-pic">?</div><div class="stamp-name">${escapeHTML(st.name)}</div></div>`;
 			    }).join('');
 			    $('planet-pic').innerHTML = `<div class="pass-grid">${cells}</div>`;
 			    $('planet-title').textContent = '📕 Mein Reisepass';
-			    const n = journey.trips > 0 ? STATIONS.length : reached + 1;
+			    const n = journey.trips > 0 ? STATIONS.length : stamps;
 			    $('planet-sub').textContent = `${n} von ${STATIONS.length} Stempeln` + (journey.trips ? ` · ${journey.trips}× um die Welt` : '');
 			    $('planet-facts').innerHTML = '';
+			    $('planet-ok').textContent = 'OK';
 			    $('planet-modal').classList.remove('hidden');
 			    $('planet-modal').querySelector('.planet-card').scrollTop = 0;
 			    planetOpen = true;
+			}
+			// Tipp auf einen Stempel im Pass
+			function showStampInfo(stationIndex) {
+			    const got = journey.trips > 0 || stationIndex < stampsFor(journey.fuel);
+			    if (!got) return;
+			    showPlanetInfo(stationIndex, journey.trips, true);
+			}
+			// „OK“: schließt das Fenster – kam es aus dem Pass, geht es zurück zum Pass
+			function confirmPlanetInfo() {
+			    if (planetFromPass) showPass();
+			    else closePlanetInfo();
 			}
 			function closePlanetInfo() {
 			    $('planet-modal').classList.add('hidden');
 			    planetOpen = false;
+			    planetFromPass = false;
 			}
 
 			// =====================================================================
@@ -4961,7 +5120,9 @@
 			document.addEventListener('keydown', (e) => {
 			    if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
 			    if (planetOpen) {
-			        if (e.key === 'Enter' || e.key === 'Escape' || e.key === ' ') { e.preventDefault(); closePlanetInfo(); }
+			        const onStamp = document.activeElement && document.activeElement.classList.contains('stamp-btn');
+			        if (e.key === 'Escape') { e.preventDefault(); closePlanetInfo(); }
+			        else if ((e.key === 'Enter' || e.key === ' ') && !onStamp) { e.preventDefault(); confirmPlanetInfo(); }
 			        return;
 			    }
 			    if (modalOpen) {
@@ -4995,6 +5156,15 @@
 			createJourneyPanel($('journey-start'), true);
 			createJourneyPanel($('journey-end'));
 			goToMenu();
+			checkHomeScreenSpeech();
+
+			// Offline-Betrieb: sw.js hält App, Symbol und alle Daten (auch die Stimme) im Speicher des Geräts.
+			// Online holt er immer die neueste Fassung, offline startet die App aus dem Speicher.
+			if ('serviceWorker' in navigator && window.isSecureContext) {
+			    const registerOffline = () => { navigator.serviceWorker.register('sw.js').catch(() => {}); };
+			    if (document.readyState === 'complete') registerOffline();
+			    else window.addEventListener('load', registerOffline);
+			}
 		</script>
 	</body>
 </html>

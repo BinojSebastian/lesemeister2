@@ -30,6 +30,7 @@ Die alte Weltall-App bleibt unberührt; beide Apps speichern ihre Daten getrennt
 | Datei | Inhalt |
 |---|---|
 | `index.html` | die App (Layout, Spiele, Weltreise, Einstellungen) |
+| `sw.js` | Service Worker: hält App, Symbol und alle Daten (auch die Stimme) für den Offline-Start auf dem Gerät |
 | `daten/sichtwoerter.js` | Wortlisten für das Sichtwörter-Spiel |
 | `daten/silben.js` | Wortlisten für das Silben-Spiel |
 | `daten/tier-texte.js` | die 12 Kapitel mit Lesequiz |
@@ -48,6 +49,8 @@ Die alte Weltall-App bleibt unberührt; beide Apps speichern ihre Daten getrennt
 - **Fakten**: nur Belegtes aufnehmen und die Quelle in `LERNINHALTE.md` eintragen.
 - **Stimme**: Nach Änderungen an Wörtern oder Texten `werkzeug/stimmen-aufnehmen.py` laufen lassen
   (Anleitung oben in der Datei). Wörter ohne Aufnahme liest solange die Stimme des Geräts.
+  Schon vorhandene Aufnahmen bleiben erhalten. `--pruefen` hört alle Aufnahmen ab und listet
+  undeutliche, `--neu unsicher` (oder `--neu Wort1,Wort2`) nimmt genau diese neu auf.
 
 ## Silben
 

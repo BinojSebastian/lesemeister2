@@ -187,9 +187,19 @@ Klimawandel lässt das Meereis schmelzen, damit fehlt die Jagdfläche.
 
 ### Stempel-Stationen ohne Kapitel
 
-- Giraffe (Tansania): [tierchenwelt.de – Giraffe](https://www.tierchenwelt.de/huftiere/73-giraffe.html)
-- Kaiserpinguin (Antarktis): [tierchenwelt.de – Kaiserpinguin](https://www.tierchenwelt.de/pinguine/113-kaiserpinguin.html)
-- Gibbon (Thailand): nur „Hier lebt der Gibbon“, keine weiteren Fakten.
+- Giraffe (Tansania): [tierchenwelt.de – Giraffe](https://www.tierchenwelt.de/huftiere/73-giraffe.html) ·
+  [WWF Junior – Giraffen](https://www.wwf-junior.de/tiere/giraffen)
+- Kaiserpinguin (Antarktis): [tierchenwelt.de – Kaiserpinguin](https://www.tierchenwelt.de/pinguine/113-kaiserpinguin.html) ·
+  [WWF Junior – Pinguine](https://www.wwf-junior.de/tiere/pinguine)
+- Gibbon (Thailand): [tierchenwelt.de – Menschenaffen](https://www.tierchenwelt.de/specials/wo-ist-der-unterschied/692-menschenaffen-affen-halbaffen-unterschied.html) ·
+  [Tierpark Berlin – Weißhandgibbon](https://www.tierpark-berlin.de/de/tierpark-erleben/tiere-erlebniswelten/weisshandgibbon) ·
+  ergänzend [WWF Österreich – Wissen Menschenaffen (PDF)](https://www.wwf.at/wp-content/uploads/2022/09/TEAMPANDA_Wissen_Menschenaffen.pdf)
+
+  Belegt: Weißhandgibbon lebt u. a. in Thailand (Tierpark Berlin); Gibbons zählen zu den kleinen Menschenaffen,
+  Menschenaffen haben keinen Schwanz (WWF Österreich; tierchenwelt nennt den Gibbon „sehr eng mit den Menschenaffen
+  verwandt“); Arme länger als die Beine, schwingen und hangeln von Ast zu Ast (tierchenwelt, WWF Österreich);
+  Schwinghangeln über bis zu 15 m (WWF Österreich) – im Text vorsichtig „über zehn Meter“; Paare singen jeden Morgen
+  und Abend im Duett und markieren so ihr Revier (Tierpark Berlin; WWF Österreich: früh morgens im Duett).
 
 Die kurzen Fakten im Länder-Fenster stammen aus denselben Quellen wie das jeweilige Kapitel.
 

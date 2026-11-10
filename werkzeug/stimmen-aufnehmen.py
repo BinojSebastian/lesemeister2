@@ -11,7 +11,17 @@ Die Stimmen gibt es als fertige Pakete bei sherpa-onnx (GitHub, Release „tts-m
   vits-piper-de_DE-eva_k-x_low.tar.bz2
 Mit --whisper (Release „asr-models“: sherpa-onnx-whisper-small.tar.bz2) prüft das Skript jede Aufnahme
 mit Spracherkennung, nimmt ein undeutliches Wort bis zu dreimal auf und behält die beste Fassung.
-Bereits aufgenommene Wörter liegen im Zwischenspeicher (--cache) und werden nicht neu erzeugt.
+Bereits aufgenommene Wörter liegen im Zwischenspeicher (--cache) oder im vorhandenen Paket
+(daten/stimme-<id>.bin) und werden nicht neu erzeugt (mit --alles-neu doch).
+
+Prüfen und gezielt neu aufnehmen (braucht --whisper):
+  --pruefen           hört alle Aufnahmen im vorhandenen Paket ab, ändert nichts und schreibt die
+                      unsicheren Wörter nach <cache>/unsicher.json
+  --neu WÖRTER        nimmt diese Wörter (mit Komma getrennt, oder „unsicher“ = Liste aus
+                      unsicher.json) neu auf: bis zu --versuche Fassungen in leicht verschiedenem Tempo,
+                      jede dreimal mit Spracherkennung in verschiedenen Sätzen geprüft. Behalten wird
+                      die deutlichste Fassung – die alte nur, wenn keine neue besser ist.
+Zahlen gelten auch als richtig erkannt, wenn die Spracherkennung sie als Wort schreibt (600 = sechshundert).
 
 Warum ein Trägersatz? Die Stimmen sprechen ein einzelnes Wort oft verschluckt und viel zu kurz
 („Hund.“ dauert nur 0,24 s). Im Satz klingen sie sauber. Deshalb spricht die Stimme
@@ -41,7 +51,11 @@ STIMMEN = {
 # Der Trägersatz endet bewusst auf einem neutralen Vokal (Schwa): Bei „… heißt:“ blieb oft das t von
 # „heißt“ am Wort hängen, nach „… also:“ begannen viele Wörter mit einem b-artigen Laut.
 TRAEGER = "Das nächste Wort, bitte:"
-VORSPANN = "Ich zeige dir jetzt das Wort"   # nur für die Prüfung mit Spracherkennung
+# Nur für die Prüfung mit Spracherkennung. Whisper hört dieselbe Aufnahme je nach Satz davor etwas
+# anders – darum wird beim gezielten Neuaufnehmen in allen drei Sätzen geprüft und gemittelt.
+VORSPAENNE = ["Ich zeige dir jetzt das Wort", "Lies bitte dieses Wort", "Jetzt kommt das Wort"]
+VORSPANN = VORSPAENNE[0]
+SICHER = 0.75     # ab dieser Note gilt eine Aufnahme als deutlich
 VERFAHREN = "traeger-bitte-1"   # ändert sich das Verfahren, wird alles neu aufgenommen
 
 # Wörter, die die Stimmen sonst falsch aussprechen würden: Wort → was die Stimme stattdessen liest
@@ -55,9 +69,50 @@ AUSSPRACHE = {
     "Psst": "Pst",
     "Kiwi": "Kiewie",
     "Kiwis": "Kiewies",
+    # Nov 2026: Eva verschluckte das g in „Känguru“ (Whisper hörte „Könnuru“); so klingt es wie „Käng-gu-ru“
+    "Känguru": "Käng-guru",
+    "Kängurus": "Käng-gurus",
+    "Kängurubaby": "Käng-guru-baby",
+    "Riesenkänguru": "Riesenkäng-guru",
+    # … und „Robben“ klang oft wie „Roben“
+    "Robben": "Rob-ben",
 }
 # Wörter, die groß und klein verschieden klingen (der Weg / weg): getrennt aufnehmen
 HOMOGRAPHE = {"weg", "sucht"}
+
+
+# Zahlen als Wort (die Spracherkennung schreibt 600 oft als „sechshundert“)
+EINER = ["null", "eins", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun", "zehn", "elf", "zwölf",
+         "dreizehn", "vierzehn", "fünfzehn", "sechzehn", "siebzehn", "achtzehn", "neunzehn"]
+ZEHNER = ["", "", "zwanzig", "dreißig", "vierzig", "fünfzig", "sechzig", "siebzig", "achtzig", "neunzig"]
+
+
+def _unter100(n, ende=True):
+    if n < 20:
+        return "ein" if (n == 1 and not ende) else EINER[n]
+    z, e = divmod(n, 10)
+    return ZEHNER[z] if e == 0 else ("ein" if e == 1 else EINER[e]) + "und" + ZEHNER[z]
+
+
+def _unter1000(n, ende=True, ein=False):
+    h, r = divmod(n, 100)
+    s = (("ein" if ein else "") + "hundert" if h == 1 else EINER[h] + "hundert") if h else ""
+    return s + (_unter100(r, ende) if r else "")
+
+
+def zahlwoerter(text):
+    """„600“ → {"sechshundert"}, „1.800“ → {"tausendachthundert", "eintausendachthundert", "achtzehnhundert"}"""
+    roh = text.replace(".", "")
+    if not roh.isdigit() or not 0 < int(roh) < 1000000:
+        return set()
+    n, out = int(roh), set()
+    for ein in (False, True):
+        t, r = divmod(n, 1000)
+        s = ((("ein" if ein else "") + "tausend") if t == 1 else _unter1000(t, False, ein) + "tausend") if t else ""
+        out.add(s + (_unter1000(r, True, ein) if r else ""))
+    if 1100 <= n < 2000 and n % 100 == 0:
+        out.add(_unter100(n // 100, False) + "hundert")
+    return out
 
 
 def schluessel(wort):
@@ -189,8 +244,8 @@ def als_16k(mp3):
 
 # ---------- Prüfen mit Spracherkennung ----------
 class Pruefer:
-    """Whisper hört den Trägersatz + Aufnahme und schreibt auf, was es danach verstanden hat."""
-    def __init__(self, ordner, tts, tempo):
+    """Whisper hört Vorspann + Aufnahme und schreibt auf, was es danach verstanden hat."""
+    def __init__(self, ordner, tts, tempo, kontexte=1):
         import sherpa_onnx
         self.rec = sherpa_onnx.OfflineRecognizer.from_whisper(
             encoder=os.path.join(ordner, "small-encoder.int8.onnx"),
@@ -198,24 +253,111 @@ class Pruefer:
             tokens=os.path.join(ordner, "small-tokens.txt"), language="de",
             num_threads=max(1, os.cpu_count() or 1))
         # eigener Vorspann: nach „bitte“ hörte Whisper oft „bittere …“ und zerlegte das Wort falsch
-        a = tts.generate(VORSPANN, sid=0, speed=tempo)
-        self.vorspann = als_16k(als_mp3(np.array(a.samples, np.float32), a.sample_rate, 32))
+        self.vorspaenne = []
+        for satz in VORSPAENNE[:max(1, kontexte)]:
+            a = tts.generate(satz, sid=0, speed=tempo)
+            self.vorspaenne.append(als_16k(als_mp3(np.array(a.samples, np.float32), a.sample_rate, 32)))
+        self.vorspann = self.vorspaenne[0]
 
     @staticmethod
     def norm(t):
         t = t.lower().replace("ß", "ss")
         return " ".join(re.sub(r"[^a-zäöü0-9 ]+", " ", t).split())
 
-    def note(self, woerter, mp3):
+    @staticmethod
+    def erwartet(woerter):
+        """alle Schreibweisen, die als richtig gelten (bei Zahlen auch das Zahlwort)"""
+        alle = set(woerter)
+        for w in woerter:
+            alle |= zahlwoerter(w)
+        return alle
+
+    def hoere(self, vorspann, mp3):
         z, zz = np.zeros(4000, np.float32), np.zeros(8000, np.float32)
         s = self.rec.create_stream()
-        s.accept_waveform(16000, np.concatenate([zz, self.vorspann, z, als_16k(mp3), zz]))
+        s.accept_waveform(16000, np.concatenate([zz, vorspann, z, als_16k(mp3), zz]))
         self.rec.decode_stream(s)
         text = s.result.text
         if "wort" in text.lower():               # alles nach dem Vorspann ist das Wort
             text = re.split("wort", text, flags=re.I)[-1]
-        gehoert = text.strip(" \"'„“.,!:?")
-        return max(difflib.SequenceMatcher(None, self.norm(w), self.norm(gehoert)).ratio() for w in woerter), gehoert
+        return text.strip(" \"'„“.,!:?")
+
+    @staticmethod
+    def laut(t):
+        """Lautschlüssel ähnlich wie in der App (phoneticKey), dazu ä = e und ck = k: Gleich Klingendes
+        zählt gleich (Whisper schreibt „Höle“ für Höhle, „Kenguru“ für Känguru). Doppelte Mitlaute
+        bleiben stehen – sie zeigen den kurzen Selbstlaut (Robben ≠ Roben)."""
+        t = t.lower().replace("ß", "ss").replace("ph", "f").replace("th", "t").replace("v", "f").replace("y", "i")
+        t = re.sub(r"[^a-zäöü]", "", t).replace("ä", "e").replace("ck", "k").replace("ie", "i")
+        t = re.sub(r"([aeiouäöü])h(?![aeiouäöü])", r"\1", t).replace("dt", "t")
+        return re.sub(r"d$", "t", re.sub(r"b$", "p", re.sub(r"g$", "k", t)))
+
+    def vergleiche(self, woerter, gehoert):
+        g = self.norm(gehoert).replace(" ", "")
+        gl = self.laut(gehoert)
+        beste = 0.0
+        for w in self.erwartet(woerter):
+            beste = max(beste, difflib.SequenceMatcher(None, self.norm(w).replace(" ", ""), g).ratio())
+            if gl and not any(c.isdigit() for c in w):
+                beste = max(beste, difflib.SequenceMatcher(None, self.laut(w), gl).ratio())
+        return beste
+
+    def note(self, woerter, mp3, kontexte=1, abbruch=None):
+        """Mittlere Note über die ersten `kontexte` Vorspänne. abbruch: hört auf, sobald klar ist,
+        dass die Note diesen Wert nicht mehr erreichen kann (spart Zeit)."""
+        noten, gehoert = [], []
+        k = min(kontexte, len(self.vorspaenne))
+        for i in range(k):
+            h = self.hoere(self.vorspaenne[i], mp3)
+            noten.append(self.vergleiche(woerter, h))
+            gehoert.append(h)
+            if abbruch is not None and (sum(noten) + (k - len(noten))) / k < abbruch:
+                break
+        return sum(noten) / k, " | ".join(gehoert)   # abgebrochene Sätze zählen mit 0
+
+
+def nimm_auf(tts, traeger_audio, pruefer, w, eingabe, tempi, versuche, kontexte, kbps, ziel):
+    """Lässt das Wort bis zu `versuche`-mal im Trägersatz sprechen (Tempo reihum aus `tempi`), schneidet
+    es auf zwei Arten heraus und gibt die beste Fassung zurück: (note, mp3, gehoert) oder None."""
+    beste = None
+    for versuch in range(versuche):
+        tempo = tempi[versuch % len(tempi)]
+        if tempo not in traeger_audio:
+            c = tts.generate(TRAEGER, sid=0, speed=tempo)
+            traeger_audio[tempo] = np.array(c.samples, np.float32)
+        s = tts.generate(f"{TRAEGER} {eingabe}.", sid=0, speed=tempo)
+        voll = np.array(s.samples, np.float32)
+        gesehen = set()
+        for schnitt in (("laengste", "erste") if pruefer else ("laengste",)):
+            stueck = schneide_wort(traeger_audio[tempo], voll, s.sample_rate, schnitt)
+            if stueck is None or len(stueck) < s.sample_rate * 0.12 or len(stueck) in gesehen:
+                continue
+            gesehen.add(len(stueck))
+            kandidat = als_mp3(zuschneiden(stueck.copy(), s.sample_rate), s.sample_rate, kbps)
+            if pruefer:
+                note, gehoert = pruefer.note({w, eingabe}, kandidat, kontexte, abbruch=beste[0] if beste else None)
+            else:
+                note, gehoert = 1.0, ""
+            if beste is None or note > beste[0]:
+                beste = (note, kandidat, gehoert)
+            if note >= ziel:
+                break
+        if beste and beste[0] >= ziel:
+            break
+    return beste
+
+
+def lade_paket(ziel, sid):
+    """Aufnahmen aus dem vorhandenen Paket: {Schlüssel: MP3}"""
+    try:
+        with open(os.path.join(ziel, "stimmen.json"), encoding="utf-8") as f:
+            manifest = json.load(f)
+        st = next(v for v in manifest["stimmen"] if v["id"] == sid)
+        with open(os.path.join(ziel, st["datei"]), "rb") as f:
+            roh = f.read()
+        return {k: roh[p:p + n] for k, (p, n) in st["eintraege"].items() if p + n <= len(roh)}
+    except Exception:
+        return {}
 
 
 def main():
@@ -227,7 +369,13 @@ def main():
     ap.add_argument("--stimmen", default="eva")
     ap.add_argument("--kbps", type=int, default=32)
     ap.add_argument("--cache", default=os.path.join(hier, ".cache"))
+    ap.add_argument("--pruefen", action="store_true", help="vorhandene Aufnahmen prüfen, nichts ändern")
+    ap.add_argument("--neu", default="", help="diese Wörter neu aufnehmen (Komma-Liste oder „unsicher“)")
+    ap.add_argument("--versuche", type=int, default=6, help="Fassungen pro Wort bei --neu")
+    ap.add_argument("--alles-neu", action="store_true", help="vorhandenes Paket nicht wiederverwenden")
     a = ap.parse_args()
+    if (a.pruefen or a.neu) and not a.whisper:
+        ap.error("--pruefen und --neu brauchen --whisper")
 
     roh = subprocess.run(["node", os.path.join(hier, "woerter-sammeln.js"), a.app],
                          capture_output=True, check=True, text=True).stdout
@@ -242,81 +390,141 @@ def main():
     saetze = {s.lower(): s for s in daten["saetze"]}
 
     ziel = os.path.join(a.app, "daten")
+    os.makedirs(a.cache, exist_ok=True)
+    pfad_unsicher = os.path.join(a.cache, "unsicher.json")
     manifest = {"erstellt": time.strftime("%Y-%m-%d"), "probe": daten["saetze"][0], "stimmen": []}
-    bericht = {}
+    bericht, neu_bericht = {}, {}
     for sid in [x.strip() for x in a.stimmen.split(",") if x.strip()]:
         tts = pruefer = None
         traeger_audio = {}
         tempo = STIMMEN[sid]["tempo"]
         cache = os.path.join(a.cache, sid)
         os.makedirs(cache, exist_ok=True)
+        paket = {} if a.alles_neu else lade_paket(ziel, sid)
         teile, eintraege, pos, neu, t0, unsicher = [], {}, 0, 0, time.time(), []
         alles = [(k, w, "wort") for k, w in sorted(auftraege.items())] + [(k, s, "satz") for k, s in saetze.items()]
+
+        def bereit(kontexte):
+            nonlocal tts, pruefer
+            if tts is None:
+                tts = lade_tts(a.modelle, sid)
+            if a.whisper and (pruefer is None or len(pruefer.vorspaenne) < kontexte):
+                pruefer = Pruefer(a.whisper, tts, tempo["satz"], kontexte)
+
+        # ---- nur prüfen: erst in einem Satz, nicht ganz Sicheres noch in zwei weiteren ----
+        if a.pruefen:
+            bereit(len(VORSPAENNE))
+            fehlt, geprueft = [], 0
+            for i, (k, w, art) in enumerate(alles):
+                if art != "wort":
+                    continue
+                if k not in paket:
+                    fehlt.append(w)
+                    continue
+                eingabe = AUSSPRACHE.get(w, w)
+                geprueft += 1
+                note, gehoert = pruefer.note({w, eingabe}, paket[k], 1)
+                if note < 1:
+                    note, gehoert = pruefer.note({w, eingabe}, paket[k], len(VORSPAENNE))
+                if note < SICHER:
+                    unsicher.append((round(note, 2), w, gehoert))
+                if i % 100 == 0:
+                    print(f"  … {i}/{len(alles)} geprüft, {len(unsicher)} unsicher", flush=True)
+            bericht[sid] = sorted(unsicher)
+            print(f"{sid}: {geprueft} Aufnahmen geprüft · {len(unsicher)} unsicher"
+                  + (f" · {len(fehlt)} ohne Aufnahme: {', '.join(fehlt)}" if fehlt else ""), flush=True)
+            for note, w, gehoert in sorted(unsicher):
+                print(f"   {note:.2f}  {w}  → {gehoert}")
+            continue
+
+        # ---- Wörter, die neu aufgenommen werden sollen ----
+        if a.neu.strip().lower() == "unsicher":
+            with open(pfad_unsicher, encoding="utf-8") as f:
+                gewuenscht = [w for _, w, _ in json.load(f).get(sid, [])]
+        else:
+            gewuenscht = [x.strip() for x in a.neu.split(",") if x.strip()]
+        neu_aufnehmen = {schluessel(w) for w in gewuenscht} | {w.lower() for w in gewuenscht}
+        unbekannt = [w for w in gewuenscht if schluessel(w) not in auftraege and w.lower() not in auftraege]
+        if unbekannt:
+            print("  ! nicht in der App:", ", ".join(unbekannt), flush=True)
+
         for k, w, art in alles:
             eingabe = AUSSPRACHE.get(w, w)
             h = hashlib.sha1(f"{VERFAHREN}|{eingabe}|{tempo[art]}|{a.kbps}|{bool(a.whisper)}".encode()).hexdigest()[:16]
             pfad = os.path.join(cache, h + ".mp3")
-            if not os.path.exists(pfad):
-                if tts is None:
-                    tts = lade_tts(a.modelle, sid)
-                    traeger_audio = {}
-                    if a.whisper:
-                        pruefer = Pruefer(a.whisper, tts, tempo["satz"])
+            if art == "wort" and k in neu_aufnehmen:
+                # Gezielt neu: mehrere Fassungen, jede in drei Sätzen geprüft; die alte zählt mit
+                bereit(len(VORSPAENNE))
+                kontexte = len(VORSPAENNE)
+                t = tempo["wort"]
+                beste = nimm_auf(tts, traeger_audio, pruefer, w, eingabe, [t, round(t - 0.05, 2), round(t + 0.05, 2)],
+                                 a.versuche, kontexte, a.kbps, ziel=1.0)
+                alt = paket.get(k)
+                alt_note, alt_gehoert = pruefer.note({w, eingabe}, alt, kontexte) if alt else (None, "")
+                if beste is None and alt is None:
+                    print(f"  ! nicht aufgenommen: {w!r}", flush=True)
+                    continue
+                if beste is not None and (alt is None or beste[0] >= alt_note):
+                    note, mp3, gehoert, behalten = beste[0], beste[1], beste[2], "neu"
+                else:
+                    note, mp3, gehoert, behalten = alt_note, alt, alt_gehoert, "alt"
+                neu_bericht.setdefault(sid, []).append({
+                    "wort": w, "alt": None if alt_note is None else round(alt_note, 2),
+                    "neu": None if beste is None else round(beste[0], 2), "behalten": behalten, "gehoert": gehoert})
+                print(f"  {w}: alt {alt_note if alt_note is None else round(alt_note, 2)} → neu "
+                      f"{None if beste is None else round(beste[0], 2)} · behalten: {behalten} · „{gehoert}“", flush=True)
+                if note < SICHER:
+                    unsicher.append((round(note, 2), w, gehoert))
+                with open(pfad, "wb") as f:
+                    f.write(mp3)
+                neu += 1
+            elif os.path.exists(pfad):
+                with open(pfad, "rb") as f:
+                    mp3 = f.read()
+            elif k in paket:
+                mp3 = paket[k]               # schon im Paket – nicht neu aufnehmen
+            else:
+                bereit(1)
                 if art == "satz":
                     s = tts.generate(eingabe, sid=0, speed=tempo["satz"])
                     mp3 = als_mp3(zuschneiden(np.array(s.samples, np.float32), s.sample_rate), s.sample_rate, a.kbps)
                 else:
-                    beste = None
-                    traeger = TRAEGER
-                    if traeger not in traeger_audio:
-                        c = tts.generate(traeger, sid=0, speed=tempo["wort"])
-                        traeger_audio[traeger] = np.array(c.samples, np.float32)
-                    for versuch in range(3 if pruefer else 1):
-                        s = tts.generate(f"{traeger} {eingabe}.", sid=0, speed=tempo["wort"])
-                        voll = np.array(s.samples, np.float32)
-                        gesehen = set()
-                        for art in (("laengste", "erste") if pruefer else ("laengste",)):
-                            stueck = schneide_wort(traeger_audio[traeger], voll, s.sample_rate, art)
-                            if stueck is None or len(stueck) < s.sample_rate * 0.12 or len(stueck) in gesehen:
-                                continue
-                            gesehen.add(len(stueck))
-                            kandidat = als_mp3(zuschneiden(stueck.copy(), s.sample_rate), s.sample_rate, a.kbps)
-                            note, gehoert = pruefer.note({w, eingabe}, kandidat) if pruefer else (1.0, "")
-                            if beste is None or note > beste[0]:
-                                beste = (note, kandidat, gehoert)
-                            if note >= 0.75:
-                                break
-                        if beste and beste[0] >= 0.75:
-                            break
+                    beste = nimm_auf(tts, traeger_audio, pruefer, w, eingabe, [tempo["wort"]],
+                                     3 if pruefer else 1, 1, a.kbps, ziel=SICHER)
                     if beste is None:
                         print(f"  ! nicht aufgenommen: {w!r}", flush=True)
                         continue
                     mp3 = beste[1]
-                    if pruefer and beste[0] < 0.75:
+                    if pruefer and beste[0] < SICHER:
                         unsicher.append((round(beste[0], 2), w, beste[2]))
                 with open(pfad, "wb") as f:
                     f.write(mp3)
                 neu += 1
-            b = open(pfad, "rb").read()
-            eintraege[k] = [pos, len(b)]
-            teile.append(b)
-            pos += len(b)
-        paket = b"".join(teile)
+            eintraege[k] = [pos, len(mp3)]
+            teile.append(mp3)
+            pos += len(mp3)
+        paket_neu = b"".join(teile)
         datei = f"stimme-{sid}.bin"
         with open(os.path.join(ziel, datei), "wb") as f:
-            f.write(paket)
+            f.write(paket_neu)
         manifest["stimmen"].append({
             "id": sid, "name": STIMMEN[sid]["name"], "datei": datei,
-            "version": hashlib.sha1(paket).hexdigest()[:10], "eintraege": eintraege})
+            "version": hashlib.sha1(paket_neu).hexdigest()[:10], "eintraege": eintraege})
         bericht[sid] = sorted(unsicher)
-        print(f"{sid}: {len(eintraege)} Aufnahmen ({neu} neu) · {len(paket) / 1e6:.2f} MB · {time.time() - t0:.0f} s"
-              + (f" · {len(unsicher)} unsicher" if pruefer else ""), flush=True)
+        print(f"{sid}: {len(eintraege)} Aufnahmen ({neu} neu) · {len(paket_neu) / 1e6:.2f} MB · {time.time() - t0:.0f} s"
+              + (f" · {len(unsicher)} unsicher" if a.whisper else ""), flush=True)
 
+    if a.whisper:
+        with open(pfad_unsicher, "w", encoding="utf-8") as f:
+            json.dump(bericht, f, ensure_ascii=False, indent=1)
+    if neu_bericht:
+        with open(os.path.join(a.cache, "neu-aufgenommen.json"), "w", encoding="utf-8") as f:
+            json.dump(neu_bericht, f, ensure_ascii=False, indent=1)
+    if a.pruefen:
+        print("geprüft, nichts geändert. Liste:", pfad_unsicher)
+        return
     with open(os.path.join(ziel, "stimmen.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, separators=(",", ":"))
-    if a.whisper:
-        with open(os.path.join(a.cache, "unsicher.json"), "w", encoding="utf-8") as f:
-            json.dump(bericht, f, ensure_ascii=False, indent=1)
     print("fertig:", os.path.join(ziel, "stimmen.json"))
 
 
